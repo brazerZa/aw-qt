@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from aw_client.config import load_config
 from .manager import Manager, Module
 
 logger = logging.getLogger(__name__)
@@ -86,7 +87,17 @@ class TrayIcon(QSystemTrayIcon):
         self.manager = manager
         self.testing = testing
 
-        self.root_url = f"http://localhost:{5666 if self.testing else 5600}"
+        _config = load_config()
+        server_config = _config["server" if not testing else "server-testing"]
+        protocol = server_config.get("protocol", "http")
+        host = server_config["hostname"]
+        port = server_config["port"]
+
+        if (protocol == "https" and str(port) == "443") or (protocol == "http" and str(port) == "80"):
+            self.root_url = f"{protocol}://{host}"
+        else:
+            self.root_url = f"{protocol}://{host}:{port}"
+            
         self.activated.connect(self.on_activated)
 
         self._build_rootmenu()
