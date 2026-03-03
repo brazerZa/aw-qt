@@ -3,9 +3,10 @@ import os
 import signal
 import subprocess
 import sys
+import time
 import webbrowser
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import aw_core
 from PyQt6 import QtCore
@@ -73,12 +74,16 @@ def open_dir(d: str) -> None:
 
 
 class TrayIcon(QSystemTrayIcon):
+    MAX_AUTO_RESTARTS = 3
+    RESTART_WINDOW_SECONDS = 600  # 10 minutes
+
     def __init__(
         self,
         manager: Manager,
         icon: QIcon,
         parent: Optional[QWidget] = None,
         testing: bool = False,
+        port: Optional[int] = None,
     ) -> None:
         QSystemTrayIcon.__init__(self, icon, parent)
         self._parent = parent  # QSystemTrayIcon also tries to save parent info but it screws up the type info
@@ -86,6 +91,7 @@ class TrayIcon(QSystemTrayIcon):
 
         self.manager = manager
         self.testing = testing
+        self._restart_timestamps: Dict[str, List[float]] = {}
 
         _config = load_config()
         server_config = _config["server" if not testing else "server-testing"]
@@ -93,14 +99,33 @@ class TrayIcon(QSystemTrayIcon):
         host = server_config["hostname"]
         port = server_config["port"]
 
-        if (protocol == "https" and str(port) == "443") or (protocol == "http" and str(port) == "80"):
+        if (protocol == "https" and str(port) == "443") or (
+            protocol == "http" and str(port) == "80"
+        ):
             self.root_url = f"{protocol}://{host}"
         else:
             self.root_url = f"{protocol}://{host}:{port}"
-            
+
         self.activated.connect(self.on_activated)
 
         self._build_rootmenu()
+
+    def _recent_restart_count(self, module_name: str) -> int:
+        """Count restarts within the sliding time window."""
+        now = time.monotonic()
+        timestamps = self._restart_timestamps.get(module_name, [])
+        cutoff = now - self.RESTART_WINDOW_SECONDS
+        return sum(1 for t in timestamps if t > cutoff)
+
+    def _record_restart(self, module_name: str) -> None:
+        """Record a restart timestamp and prune old entries."""
+        now = time.monotonic()
+        cutoff = now - self.RESTART_WINDOW_SECONDS
+        timestamps = self._restart_timestamps.get(module_name, [])
+        # Prune old timestamps and add current
+        self._restart_timestamps[module_name] = [
+            t for t in timestamps if t > cutoff
+        ] + [now]
 
     def on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
@@ -138,7 +163,9 @@ class TrayIcon(QSystemTrayIcon):
         # Seems to be in agreement with: https://github.com/OtterBrowser/otter-browser/issues/1313
         #   "it seems that the bug is also triggered when creating a QIcon with an invalid path"
         if exitIcon.availableSizes():
-            menu.addAction(exitIcon, "Quit Malachi ActivityWatch", lambda: exit(self.manager))
+            menu.addAction(
+                exitIcon, "Quit Malachi ActivityWatch", lambda: exit(self.manager)
+            )
         else:
             menu.addAction("Quit Malachi ActivityWatch", lambda: exit(self.manager))
 
@@ -147,11 +174,25 @@ class TrayIcon(QSystemTrayIcon):
         def show_module_failed_dialog(module: Module) -> None:
             box = QMessageBox(self._parent)
             box.setIcon(QMessageBox.Icon.Warning)
-            box.setText(f"Module {module.name} quit unexpectedly")
+            recent = self._recent_restart_count(module.name)
+            box.setText(
+                f"Module {module.name} quit unexpectedly"
+                + (
+                    f" after {recent} auto-restart attempts"
+                    f" in {self.RESTART_WINDOW_SECONDS // 60} minutes"
+                    if recent >= self.MAX_AUTO_RESTARTS
+                    else ""
+                )
+            )
             box.setDetailedText(module.read_log(self.testing))
 
             restart_button = QPushButton("Restart", box)
-            restart_button.clicked.connect(module.start)
+
+            def on_manual_restart() -> None:
+                self._restart_timestamps.pop(module.name, None)
+                module.start(self.testing)
+
+            restart_button.clicked.connect(on_manual_restart)
             box.addButton(restart_button, QMessageBox.ButtonRole.AcceptRole)
             box.setStandardButtons(QMessageBox.StandardButton.Cancel)
 
@@ -163,31 +204,54 @@ class TrayIcon(QSystemTrayIcon):
                     module: Module = action.data()
                     alive = module.is_alive()
                     action.setChecked(alive)
-                    # print(module.text(), alive)
 
-            # TODO: Do it in a better way, singleShot isn't pretty...
             QtCore.QTimer.singleShot(2000, rebuild_modules_menu)
 
         QtCore.QTimer.singleShot(2000, rebuild_modules_menu)
 
         def check_module_status() -> None:
             unexpected_exits = self.manager.get_unexpected_stops()
-            if unexpected_exits:
-                for module in unexpected_exits:
+            for module in unexpected_exits:
+                recent = self._recent_restart_count(module.name)
+                if recent < self.MAX_AUTO_RESTARTS:
+                    logger.info(
+                        f"Auto-restarting crashed module {module.name} "
+                        f"(attempt {recent + 1}/{self.MAX_AUTO_RESTARTS}"
+                        f" in {self.RESTART_WINDOW_SECONDS // 60}min window)"
+                    )
+                    module.stop()  # Clean up state
+                    module.start(self.testing)
+                    self._record_restart(module.name)
+                    self.showMessage(
+                        "ActivityWatch",
+                        f"Module {module.name} crashed and was auto-restarted",
+                        QSystemTrayIcon.MessageIcon.Warning,
+                        5000,
+                    )
+                else:
+                    logger.warning(
+                        f"Module {module.name} exceeded max auto-restarts "
+                        f"({self.MAX_AUTO_RESTARTS})"
+                    )
                     show_module_failed_dialog(module)
                     module.stop()
 
-            # TODO: Do it in a better way, singleShot isn't pretty...
-            QtCore.QTimer.singleShot(2000, rebuild_modules_menu)
+            QtCore.QTimer.singleShot(5000, check_module_status)
 
-        QtCore.QTimer.singleShot(2000, check_module_status)
+        QtCore.QTimer.singleShot(5000, check_module_status)
 
     def _build_modulemenu(self, moduleMenu: QMenu) -> None:
         moduleMenu.clear()
 
         def add_module_menuitem(module: Module) -> None:
             title = module.name
-            ac = moduleMenu.addAction(title, lambda: module.toggle(self.testing))
+
+            def on_toggle(m: Module = module) -> None:
+                m.toggle(self.testing)
+                # Reset auto-restart timestamps on manual toggle
+                self._restart_timestamps.pop(m.name, None)
+
+            ac = moduleMenu.addAction(title, on_toggle)
 
             ac.setData(module)
             ac.setCheckable(True)
@@ -215,7 +279,7 @@ def exit(manager: Manager) -> None:
     QApplication.quit()
 
 
-def run(manager: Manager, testing: bool = False) -> Any:
+def run(manager: Manager, testing: bool = False, port: Optional[int] = None) -> Any:
     logger.info("Creating trayicon...")
     # print(QIcon.themeSearchPaths())
 
@@ -252,13 +316,28 @@ def run(manager: Manager, testing: bool = False) -> Any:
     # root widget
     widget = QWidget()
 
+    # Wait for system tray to become available (up to 10 s).
+    # On some desktop environments (e.g. KDE Plasma), autostart programs
+    # launch before the panel/system tray is loaded.  Qt docs note that
+    # "if the system tray is currently unavailable but becomes available
+    # later, QSystemTrayIcon will automatically add an entry."
+    # See: https://github.com/ActivityWatch/aw-qt/issues/97
     if not QSystemTrayIcon.isSystemTrayAvailable():
-        QMessageBox.critical(
-            widget,
-            "Systray",
-            "I couldn't detect any system tray on this system. Either get one or run the ActivityWatch modules from the console.",
-        )
-        sys.exit(1)
+        logger.info("System tray not yet available, waiting up to 10 s...")
+        for i in range(10):
+            time.sleep(1)
+            # Process events so Qt can detect tray availability changes
+            app.processEvents()
+            if QSystemTrayIcon.isSystemTrayAvailable():
+                logger.info(f"System tray became available after {i + 1}s")
+                break
+        else:
+            QMessageBox.critical(
+                widget,
+                "Systray",
+                "I couldn't detect any system tray on this system. Either get one or run the ActivityWatch modules from the console.",
+            )
+            sys.exit(1)
 
     if sys.platform == "darwin":
         icon = QIcon("icons:black-monochrome-logo.png")
@@ -267,8 +346,14 @@ def run(manager: Manager, testing: bool = False) -> Any:
     else:
         icon = QIcon("icons:logo.png")
 
-    trayIcon = TrayIcon(manager, icon, widget, testing=testing)
+    trayIcon = TrayIcon(manager, icon, widget, testing=testing, port=port)
     trayIcon.show()
+
+    # Re-apply tooltip after show() to ensure it registers with the
+    # platform's system tray backend.  On Windows 11 the tooltip can
+    # appear empty when it is only set before the icon is visible.
+    # See: https://github.com/ActivityWatch/aw-qt/issues/112
+    trayIcon.setToolTip(trayIcon.toolTip())
 
     QApplication.setQuitOnLastWindowClosed(False)
 
