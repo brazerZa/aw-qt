@@ -2,6 +2,8 @@
 
 build:
 	poetry install
+#	Bake the version from git tags into __about__.py
+	python -m aw_qt.__about__
 
 install:
 	bash scripts/config-autostart.sh

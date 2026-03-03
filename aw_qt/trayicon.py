@@ -1,6 +1,7 @@
 import logging
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -21,6 +22,7 @@ from PyQt6.QtWidgets import (
 )
 
 from aw_client.config import load_config
+from .__about__ import __version__
 from .manager import Manager, Module
 
 logger = logging.getLogger(__name__)
@@ -131,6 +133,24 @@ class TrayIcon(QSystemTrayIcon):
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             open_webui(self.root_url)
 
+    def _show_about(self) -> None:
+        """Show an About dialog with version, hostname, and server URL."""
+        hostname = socket.gethostname()
+        about_text = (
+            f"<h3>Malachi ActivityWatch</h3>"
+            f"<p><b>Version:</b> {__version__}</p>"
+            f"<p><b>Hostname:</b> {hostname}</p>"
+            f"<p><b>Server:</b> {self.root_url}</p>"
+        )
+
+        box = QMessageBox(self._parent)
+        box.setWindowTitle("About Malachi ActivityWatch")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        box.setText(about_text)
+        box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        box.show()
+
     def _build_rootmenu(self) -> None:
         menu = QMenu(self._parent)
 
@@ -155,6 +175,7 @@ class TrayIcon(QSystemTrayIcon):
             "Open config folder", lambda: open_dir(aw_core.dirs.get_config_dir(None))
         )
         menu.addSeparator()
+        menu.addAction("About Malachi ActivityWatch", self._show_about)
 
         exitIcon = QIcon.fromTheme(
             "application-exit", QIcon("media/application_exit.png")

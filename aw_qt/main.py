@@ -14,6 +14,7 @@ from aw_core.log import setup_logging
 
 from .manager import Manager
 from .config import AwQtSettings
+from .__about__ import __version__
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,7 @@ def _acquire_single_instance_lock(testing: bool) -> QLockFile:
 
 
 @click.command("aw-qt", help="A trayicon and service manager for ActivityWatch")
+@click.version_option(version=__version__, prog_name="aw-qt")
 @click.option(
     "--testing", is_flag=True, help="Run the trayicon and services in testing mode"
 )
