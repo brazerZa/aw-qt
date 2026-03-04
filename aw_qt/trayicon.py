@@ -66,7 +66,7 @@ def open_apibrowser(root_url: str) -> None:
 
 def open_leaderboard(root_url: str) -> None:
     print("Opening leaderboard")
-    open_url(root_url + "/#/leaderboard")
+    open_url(root_url + "/static/leaderboard/index.html")
 
 
 def open_dir(d: str) -> None:
