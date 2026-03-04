@@ -64,6 +64,11 @@ def open_apibrowser(root_url: str) -> None:
     open_url(root_url + "/api")
 
 
+def open_leaderboard(root_url: str) -> None:
+    print("Opening leaderboard")
+    open_url(root_url + "/#/leaderboard")
+
+
 def open_dir(d: str) -> None:
     """From: http://stackoverflow.com/a/1795849/965332"""
     if sys.platform == "win32":
@@ -145,6 +150,7 @@ class TrayIcon(QSystemTrayIcon):
 
         box = QMessageBox(self._parent)
         box.setWindowTitle("About Malachi ActivityWatch")
+        box.setWindowIcon(self.icon())
         box.setIcon(QMessageBox.Icon.Information)
         box.setTextFormat(QtCore.Qt.TextFormat.RichText)
         box.setText(about_text)
@@ -161,6 +167,7 @@ class TrayIcon(QSystemTrayIcon):
         # openWebUIIcon = QIcon.fromTheme("open")
         menu.addAction("Open Dashboard", lambda: open_webui(self.root_url))
         menu.addAction("Open API Browser", lambda: open_apibrowser(self.root_url))
+        menu.addAction("Open Leaderboard", lambda: open_leaderboard(self.root_url))
 
         menu.addSeparator()
 
