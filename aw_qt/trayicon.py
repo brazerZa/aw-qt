@@ -165,8 +165,10 @@ class TrayIcon(QSystemTrayIcon):
             menu.addSeparator()
 
         # openWebUIIcon = QIcon.fromTheme("open")
-        menu.addAction("Open Dashboard", lambda: open_webui(self.root_url))
-        menu.addAction("Open API Browser", lambda: open_apibrowser(self.root_url))
+        menu.addAction("Open Dashboard (admin)", lambda: open_webui(self.root_url))
+        menu.addAction(
+            "Open API Browser (admin)", lambda: open_apibrowser(self.root_url)
+        )
         menu.addAction("Open Leaderboard", lambda: open_leaderboard(self.root_url))
 
         menu.addSeparator()
